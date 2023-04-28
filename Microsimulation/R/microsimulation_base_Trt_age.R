@@ -14,12 +14,18 @@
 ## (2) Individuals in 'high risk' are at a higher risk of developing illness
 ## (3) Everyone has the same mortality (regardless of sex and age) unless they develop illness
 ## (4) Sick individuals have higher mortality than the others
-## (5) In 'Screening_all' scenario, all healthy individuals will be screened are on the treatment
+## (5) In 'Treatment' scenario, everyone with disease are on the treatment
 ## (6) Treatment improves utility during sickness but it does NOT recover illness
 
 ## ASSIGNMNET ##
-## For assignment #3, 
+## Revise the model's assumption of equal mortality. Model age- and sex-specific mortality 
+## using the data "us_mortality_2019.csv” and discuss how the results (Cost, QALY of two scenarios) change 
+## In this assignment, assume that the additional mortality due to sickeness is 0.04
+## For example, if mortality in healthy 25yo female is 0.000579, sick 25yo female has a mortality of 0.040579
 
+## Find an example paper that used microsimulation for health policy evaluation. 
+## Discuss what nature of the disease and policy of interest led to using microsimulation 
+## instead of Markov. Did the paper implemented any measure to overcame the disadvantage of using microsimulation.(250 words max)
 #######################################################################
 
 
@@ -58,12 +64,18 @@ sd_age <- 4 # sd of age
 pHS_low <- 0.1 # Probability of getting sick if low risk 
 pHS_high <- 0.6 # Probability of getting sick if high risk
 pHS <- list(low=pHS_low, high=pHS_high)
-pDie_H <- 0.01 # Mortality if healthy (Baseline mortality)
-pDie_S <- 0.05 # Mortality if sick (Baseline + disease specific mortality)
-pDie <- list(H=pDie_H, S = pDie_S)
-
-# Use this dataset for assignment (Add age-specific mortality)
-#dt_mort <- read.csv("data/us_mortality_2019.csv")
+#pDie_H <- 0.01 # Mortality if healthy (Baseline mortality)
+#pDie_S <- 0.05 # Mortality if sick (Baseline + disease specific mortality)
+#pDie <- list(H=pDie_H, S = pDie_S)
+# For assingment, first comment out pDie_H, pDie_S, and pDie (three lines above)
+# Use this dataset for age-specific mortality
+dt_mort <- read.csv("data/us_mortality_2019.csv")
+#Use the following lines to set up mortality-related parameters
+colnames(dt_mort) <- c("age","female","male") # change the dataset's column name
+pDie_H <- dt_mort
+pDie_S <- dt_mort %>% mutate(female=ifelse(female+0.04>1,1,female+0.04),
+                              male=ifelse(male+0.04>1,1,male+0.04))
+pDie <- list(H=pDie_H, S=pDie_S) # Now you have mortality for healthy and sick as data set instead of a constant
 
 # Utilities
 u.H <- 1 # Utility if healthy
@@ -122,12 +134,11 @@ MicroSim <- function(m_health, n_pop, t_end, v_state, d.c, d.e, TR.out = TRUE, T
     set.seed(seed + i)                  # set the seed for every individual for the random number generator
     m_C[i, 1] <- Costs(m_health[i, 1], Trt)  # estimate costs per individual for the initial health state conditional on treatment
     m_E[i, 1] <- Effs (m_health[i, 1], Trt)  # estimate QALYs per individual for the initial health state conditional on treatment
-  
+
     # Transition probability for individual i
     for (t in (1:t_end)){
       # Calculate transition probability for individual i given time t
-      pTrans <- cal_p(parameters,health=m_health[i,t],sex=m_sex[i,t],risk=m_risk[i,t],age=m_age[i,t])
-      
+      pTrans <- Probs(health=m_health[i,t],sex=m_sex[i,t],risk=m_risk[i,t],age=m_age[i,t])
       # update health state
       m_health[i,t + 1] <- sample(v_state,size=1,prob=pTrans,replace=TRUE)
       
@@ -168,25 +179,39 @@ MicroSim <- function(m_health, n_pop, t_end, v_state, d.c, d.e, TR.out = TRUE, T
 
 }
 
+# A function to identify age-specific mortality given age and sex
+Mort <- function(sex,age,this_mort){
+  # sex: sex of an individual
+  # age: age of an individual
+  # this_mort: mortality table (by age on the row, by sex on the column)
+  
+  # Write a code to define a variable 'this_pDie' that indicates age- and sex-specific mortality
+  age_idx <- findInterval(age,this_mort[,'age'])  # find age index (row number)
+  this_pDie <- this_mort[age_idx,sex] # read age- and sex-specific mortality
+  # Write a code to return this_pDie
+  return(this_pDie) # return age- and sex-specific mortality
+}
+
 # A function to calculate transition probabilities for individual i given time t
-cal_p <- function(parameters, health, sex, risk, age){
+Probs <- function(health, sex, risk, age){
   # Transition probability from Healthy to Sick given risk group
   this_pHS <- pHS[[risk]]
   # Transition probability of dying given health state (Healthy or Sick)
-  this_pDie <- pDie[[health]]
+  this_mort <- pDie[[health]] 
+  # TODO: remove the line above for assignment and use the 'Mort' function to find age and sex specific mortality
+  this_pDie <- Mort(sex,age,this_mort)
   
   pTrans <- rep(NA,n_state)
   pTrans[health == 'H'] <- c(1-this_pHS-this_pDie, this_pHS, this_pDie)
   pTrans[health == 'S'] <- c(0, 1-this_pDie, this_pDie)
   pTrans[health == 'D'] <- c(0,0,1)
-  
   # Check if transition probabilities sum up to 1 
-  ifelse(sum(pTrans)!=1,print("Transition probabilities do not sum up to 1"),return(pTrans))
+  ifelse(!all.equal(sum(pTrans),1),print("Transition probabilities do not sum up to 1"),return(pTrans))
 }
 
 # A function to calculate cost for individual i given time t
 Costs <- function (health, Trt = FALSE) {
-  # M_it: health state occupied by individual i at cycle t (character variable)
+  # health: health state occupied by individual i at cycle t (character variable)
   # Trt:  is the individual being treated? (default is FALSE) 
   
   c.it <- 0                                  # by default the cost for everyone is zero 
@@ -197,10 +222,9 @@ Costs <- function (health, Trt = FALSE) {
 
 # A function to calculate utility for individual i given time t
 Effs <- function (health, Trt = FALSE) {
-  # M_it: health state occupied by individual i at cycle t (character variable)
+  # health: health state occupied by individual i at cycle t (character variable)
   # Trt:  is the individual treated? (default is FALSE) 
-  # cl:   cycle length (default is 1)
-  
+
   u.it <- 0                      # by default the utility for everyone is zero
   u.it[health == "H"]  <- u.H      # update the utility if healthy
   u.it[health == "S"] <- Trt * u.Trt + (1 - Trt) * u.S  # update the utility if sick conditional on treatment
@@ -217,7 +241,7 @@ sim_trt     <- MicroSim(m_health, n_pop, t_end, v_state, d.c, d.e, Trt = TRUE)  
 
 
 ##5. Generate graphs of intermediate outcomes (e.g. without treatment)
-# A. Distribution of the time spent in 'Healthy' before decoming 'Sick' (i.e. when H->S happened)
+# A. Distribution of the time spent in 'Healthy' before becoming 'Sick' (i.e. when H->S happened)
 TS_notrt <- sim_no_trt$TS
 TS_HS <- apply(TS_notrt, 1, function(x) which(x=='H->S')[1])
 TS_HD <- apply(TS_notrt, 1, function(x) which(x=='H->D')[1])
@@ -295,15 +319,5 @@ ggplot(data=dt_tc)+
   geom_vline(aes(xintercept=sim_trt$tc_hat), color='tomato')+
   xlab("Total cost")+
   theme_bw()
-
-# If we want to see the results by risk group..
-
-
-
-
-
-
-
-
 
 
