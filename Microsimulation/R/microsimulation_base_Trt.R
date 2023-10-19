@@ -189,7 +189,7 @@ Mort <- function(sex,age,this_mort){
   # this_mort: mortality table (by age on the row, by sex on the column)
   
   # Write a code to define a variable 'this_pDie' that indicates age- and sex-specific mortality
-  this_pDie = 
+  this_pDie = 3
   # Write a code to return this_pDie
   
 }
