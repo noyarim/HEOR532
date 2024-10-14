@@ -7,7 +7,7 @@
 
 ## Writer: Kyueun Lee 
 ## Date created: Mar 28, 2023
-## Date modified: Apr 11, 2023
+## Date modified: Jan 30, 2024
 
 ## In the base model, following is assumed:
 ## (1) Individual is characterized by age, sex, and risk level
@@ -22,10 +22,13 @@
 ## using the data "us_mortality_2019.csv” and discuss how the results (Cost, QALY of two scenarios) change 
 ## In this assignment, assume that the additional mortality due to sickeness is 0.04
 ## For example, if mortality in healthy 25yo female is 0.000579, sick 25yo female has a mortality of 0.040579
+## use the updated model to generate a population of individuals where 70% of population are female and 
+## 20% are low risk. Average age is 40 and standard deviation is 2.5. 
+## Discuss how the ICER estimate and standard error of mean cost and QALY changed.
 
 ## Find an example paper that used microsimulation for health policy evaluation. 
 ## Discuss what nature of the disease and policy of interest led to using microsimulation 
-## instead of Markov. Did the paper implemented any measure to overcame the disadvantage of using microsimulation.(250 words max)
+## instead of Markov. Did the paper implemented any particular tricks to how the study overcame the disadvantage of using microsimulation.(250 words max)
 #######################################################################
 
 
@@ -51,14 +54,14 @@ seed <- 1234 # seed for generating population
 n_pop <- 100 # pop size
 t_end <- 10 # total simulation time
 cSex <- c("female","male") 
-dSex <- c(female=0.5, male=0.5) # distribution of sex
+dSex <- c(female=0.7, male=0.3) # distribution of sex
 cRisk <- c("low","high")
-dRisk <- c(low=0.8, high=0.2) # initial distribution of low/high risk group
+dRisk <- c(low=0.2, high=0.8) # initial distribution of low/high risk group
 v_state <- c("H","S","D")
 dHealth <- c(healthy=1, sick=0, dead=0) # initial distribution of health states
 n_state <- length(v_state)
-mu_age <- 50 # mean age
-sd_age <- 4 # sd of age
+mu_age <- 40 # mean age
+sd_age <- 2.5 # sd of age
 
 # Transition probabilities
 pHS_low <- 0.1 # Probability of getting sick if low risk 
@@ -101,7 +104,7 @@ m_age <- matrix(rep(v_age, t_end+1),nrow = n_pop)
 
 # Sex
 rn_sex <- runif(n_pop)
-v_sex <- as.numeric(rn_sex < dSex['female']) # 1=female, 0=male 
+#v_sex <- as.numeric(rn_sex < dSex['female']) # 1=female, 0=male 
 v_sex <- sample(cSex, size = n_pop, prob = dSex, replace = TRUE)
 table(v_sex)
 m_sex <- matrix(rep(v_sex, t_end+1),nrow = n_pop)

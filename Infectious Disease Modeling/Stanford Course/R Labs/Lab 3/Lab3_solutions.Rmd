@@ -1,0 +1,373 @@
+---
+title: 'Lab 3: Interventions & Sensitivity Analysis'
+output:
+  html_document: default
+  pdf_document: default
+---
+  
+## Section 0: 
+The first step in the lab is to install any packages you do not have. For example, you may need to install the package plsgenomics using Tools->Install Packages.
+
+We also include a helper function to graph runs of our SIR models. Take a look at the comments which clarify which colored line corresponds to which compartment in the model.
+
+**Select and run the code in Section 0.**
+
+
+```{r, message=FALSE, warning=FALSE}
+###### Section 0: Libraries to load; If you do not have them install from Tools menu
+library(deSolve)
+library(ggplot2)
+library(plsgenomics)
+
+#### Helper Functions
+show_SIR_model_results<-function(output) {
+## blue (not shown) is susceptibles
+## red is infectious
+## green is recovered
+## purple is vaccinated
+  df1 <- data.frame(output)
+  ggplot() + 
+    #    geom_line(data = df1, aes(x = time, y = X), color = "blue") +
+    geom_line(data = df1, aes(x = time, y = Y), color = "red") +
+    geom_line(data = df1, aes(x = time, y = Z), color = "green") +
+    geom_line(data = df1, aes(x = time, y = V), color = "purple") +
+    xlab('Time') +
+    ylab('Count') 
+}
+```
+
+## Section 1: 
+Next examine the code for Open SIR Model With Imperfect/Waning Vaccination.
+
+**Select and run the code in Section 1 **
+
+```{r}
+###### Section 1: Examine the function for the Open SIR Model With Imperfect/Waning Vaccination
+OpenSIRVax<-function(t, state, parameters) {
+  with(as.list(c(state, parameters)),{
+    # rate of change
+    N = X + Y + Z + V
+    dX <- (1-(p_vax*p_imm_vax))*birth*N + waning*V - beta*X*Y/N - death*X
+    dY <- beta*X*Y/N - death*Y - recover*Y
+    dZ <- recover*Y - death*Z
+    dV <- ((p_vax*p_imm_vax))*birth*N - waning*V - death*V
+    
+    # return the rate of change
+    list(c(dX, dY, dZ, dV))
+  }) # end with(as.list ...
+}
+```
+*Question 1: What happens to individuals whose immunity wanes?* 
+Individuals whose immunity wanes transition back to the susceptible compartment via the waning\*V term.
+
+*Question 2: Can natural immunity wane? What change(s) would you make if you wanted natural immunity to wane as well? (DON’T MAKE ANY CHANGES THOUGH)?* 
+Biologically, yes, but as written in OpenSIRVax, natural immunity cannot wane. However, this could be added by including a negative wane_immune\*Z term in the dZ equation and a positive wane_immune\*Z term in the dX equation, where wane_immune is the inverse duration of immunity. 
+
+
+## Section 2:
+
+Next examine the code in in Section 2. We are ensuring that the population size is stable by making the birth and death rates the same.
+
+**Select and run the code in Section 2.**
+
+```{r}
+###### Section 2: Initializing parameters, initial state, and First model run w/o vaccination
+
+birth = 0.05
+death = birth
+parameters_novax <- c(birth     = birth, # birth rate
+                      death     = death, # death rate = birth rate so stable population
+                      beta      = 0.4,   # trasmission rate
+                      recover   = 0.2,   # recovery rate
+                      p_vax     = 0.0,   # proportion of infants vaccinated
+                      p_imm_vax = 0.0,   # probability of immunity conditional on vaccination
+                      waning    = 0.0    # waning rate for vaccine induced immunity
+)
+
+state <- c(X = 99999,
+           Y = 1,
+           Z = 0,
+           V = 0
+)
+
+times <- seq(0, 500, by = 1)
+output_novax <- ode(y = state, times = times, func = OpenSIRVax, parms = parameters_novax)
+show_SIR_model_results(output_novax)
+```
+
+*Question 3: What is the peak prevalence of infectious individuals? At what time t does it occur approximately? What is the equilibrium prevalence?*
+As observed in the graph and model output (see below code), the peak prevalence of infectious individuals is around 12.3\% (12,250 infections), and it occurs around time step 76. The equilibrium prevalence is 7.5\% (7,500 infections). 
+
+```{r}
+peak_prev <- max(data.frame(output_novax)$Y)
+peak_prev
+peak_prev/sum(state)
+
+peak_prev_t <- data.frame(output_novax)$t[data.frame(output_novax)$Y==peak_prev]
+peak_prev_t
+
+eq_prev <- data.frame(output_novax)$Y[450]
+eq_prev
+eq_prev/sum(state)
+```
+
+
+*Question 4: Does the equilibrium prevalence match with theory?*
+In an SIR model with demography, no vaccination, and no waning immunity, the equilibrium prevalence $I^* = (\mu/\beta) *(R_0-1), R_0=\beta/(\mu + \gamma). \mu, \beta, \gamma$ are defined above, resulting in $I^*=7.5\%$ (see code below), which matches the model output above.
+```{r}
+R0 <- parameters_novax["beta"]/(parameters_novax["death"] + parameters_novax["recover"])
+R0
+
+I_eq <- (parameters_novax["death"]/parameters_novax["beta"])*(R0-1)
+I_eq
+```
+
+
+## Section 3:
+
+Next examine the code in this section which encompasses a helper function and running the helper function on our output from the no vaccination run.
+
+**Select and run the code in Section 3.**
+
+```{r}
+###### Section 3: Two more helper functions
+
+compute_cumulative_infection_time<-function(output) {
+  df1 <- data.frame(output)
+  return(sum(df1$Y))
+}
+
+compute_cumulative_infection_time(output_novax)
+```
+
+*Question 5: The helper function is called “compute_cumulative_infection_time”. Describe what it is does? Why is the quantity it computes interesting (REMEMBER LAST LECTURE, BUT DON’T WORRY IF YOU CAN’T ANSWER THIS AS IT WILL BECOME CLEAR LATER ON)?*
+The helper function "compute_cumulative_infection_time" sums the Y compartment across the entire time period modeled, resulting in a calculation of cumulative person-time infected, as the name implies (e.g. if the time step is 1 day, then this is the total number of people infected every day, summed over all days modeled). Note that this is total infection-time and not total infections because an individual can be infected over multiple days and thus counted multiple times when the Y compartment is summed. Cumulative infection time coudl be an outcome that we want to minimize in designing interventions or assessing results of sensitivity analysis.  
+
+## Section 4:
+
+Examine the parameter set in section 4. Notice that p_vax is 0.1 (10\% of babies get vaccinated). Notice that p_imm_vax is 1.0 (100\% of vaccinated babies are immunized). 
+
+**Select and run the code in Section 4**
+
+```{r}
+###### Section 4: Running the model with perfect vaccination but incomplete coverage
+
+parameters_vaxperf <- c(birth     = birth, # birth rate
+                        death     = death, # death rate = birth rate so stable population
+                        beta      = 0.4,   # trasmission rate
+                        recover   = 0.2,   # recovery rate
+                        p_vax     = 0.1,   # proportion of infants vaccinated
+                        p_imm_vax = 1.0,   # probability of immunity conditional on vaccination
+                        waning    = 0.0    # waning rate for vaccine induced immunity
+)
+
+output_vaxperf <- ode(y = state, times = times, func = OpenSIRVax, parms = parameters_vaxperf)
+show_SIR_model_results(output_vaxperf)
+
+compute_cumulative_infection_time(output_vaxperf)
+```
+
+*Question 6: With vaccination, what is the peak prevalence of infectious individuals? At what time t does it occur approximately? What is the equilibrium prevalence? How do these differ from your answers to Question 3? How does the cumulative infection time with vaccination differ from what you computed in Section 3?*
+With 10\% coverage of a perfect vaccine, the peak prevalence decreases from over 12\% without vaccination to 8\% (8011 infections). The peak is also delayed by 16 timesteps (from t=76 to t=92). The equilibrium prevalence is also lower (5.5\% down from 7.5\%). Cumulative infection time has decreased from 3.4 million to 2.5 million. 
+
+```{r}
+peak_prev <- max(data.frame(output_vaxperf)$Y)
+peak_prev
+peak_prev/sum(state)
+
+peak_prev_t <- data.frame(output_vaxperf)$t[data.frame(output_vaxperf)$Y==peak_prev]
+peak_prev_t
+
+eq_prev <- data.frame(output_vaxperf)$Y[450]
+eq_prev
+eq_prev/sum(state)
+```
+## Section 5:
+
+In this section we consider a simple threshold analysis.
+
+First look at the function call_ode. It is a wrapper function that will be useful when we want to run our model many times while only changing parameters. Notice what quantity it returns.
+
+The rest of the code in this section makes a set of 90 parameter sets. The first is no vaccination, and the second is perfect vaccination with increasing levels of coverage from 0.01 to 0.90 (1\% to 90\%). You can see this with the head and tail commands that show params_to_try.
+
+Next our model is applied to each of the parameter sets using the apply command and using as the function to be applied the call_ode wrapper function mentioned earlier. This generates output (cumulative infection time) that is stored in cum_infections, which we plot.
+
+**Select and run the code in Section 5.**
+
+```{r}
+###### Section 5: Simple threshold analysis
+
+call_ode<-function(params) {
+  output <- ode(y = state, time = times, func = OpenSIRVax, parms = params)
+  return(compute_cumulative_infection_time(output))
+}
+
+params_to_try <- parameters_novax
+for(i in 1:90) {
+  
+  new_params    <- parameters_vaxperf
+  new_params[5] <- i/100
+    
+  params_to_try <- rbind(params_to_try, new_params)
+  rownames(params_to_try)[i+1] <- paste0("vax",i)
+}
+
+head(params_to_try)
+tail(params_to_try)
+
+cum_infections <- t(apply(params_to_try, 1, call_ode))
+plot(x = seq(0:90)/100, y=cum_infections)
+```
+
+
+*Question 7: Interpret the plot. Explain what our simple threshold analysis shows.*
+In this plot, the x-axis represents vaccine coverage, with coverage levels ranging from 1\% to 90\%. The y-axis is cumulative infection time. As expected, cumulative infection time declines with increasing vaccine coverage. At first, the decline is fairly linear. At a certain threshold (slightly under 40\%), vaccination coverage is high enough that infections are eliminated and the system moves to a disease-free equilibrium. Theory tells us that the critical proportion to immunize will be $1-1/R_0$, which is $1-1/1.6=37.5\%$, which matches with the output from the graph. 
+
+## Section 6:
+
+We now examine imperfect vaccination (where the probability that a vaccinated child is immunized is less than 100\%). Notice that we assume that in our new parameter set the probability is 40\%.
+
+**Select and run the code in Section 6**
+
+```{r}
+###### Section 6: Imperfect vaccination
+  
+parameters_vaximperf <- c(birth     = birth, # birth rate
+                        death     = death, # death rate = birth rate so stable population
+                        beta      = 0.4,   # trasmission rate
+                        recover   = 0.2,   # recovery rate
+                        p_vax     = 0.1,   # proportion of infants vaccinated
+                        p_imm_vax = 0.4,   # probability of immunity conditional on vaccination
+                        waning    = 0.0    # waning rate for vaccine induced immunity
+)
+
+output_vaximperf <- ode(y = state, times = times, func = OpenSIRVax, parms = parameters_vaximperf)
+show_SIR_model_results(output_vaximperf)
+```
+
+
+*Question 8: For imperfect vaccination, what is the peak prevalence of infectious individuals? At what time t does it occur approximately? What is the equilibrium prevalence? How does this compare to perfect vaccination?*
+With imperfect vaccination (and 10\% coverage), peak prevalence is 10.5\% (10,502 infections) and occurs at t=81, which is between the peak prevalence and timing without vaccination (12.3\%, t=92) and the peak prevalence with perfect vaccination (8.0\%, t=76). Equilibrium prevalence (6700 infections/6.7\% prevalence) is similarly between the no vaccination and perfect vaccination levels (5.5\% and 7.5\% respectively). 
+
+```{r}
+peak_prev <- max(data.frame(output_vaximperf)$Y)
+peak_prev
+peak_prev/sum(state)
+
+peak_prev_t <- data.frame(output_vaximperf)$t[data.frame(output_vaximperf)$Y==peak_prev]
+peak_prev_t
+
+eq_prev <- data.frame(output_vaximperf)$Y[450]
+eq_prev
+eq_prev/sum(state)
+```
+
+## Section 7:
+To prepare for running a 2-way sensitivity analyses of vaccine coverage (p_vax) against vaccine efficacy (p_imm_vax), run the first three lines of code (the calls to call_ode) in this section. Notice the pattern in the number of infection-years from perfect vaccination to no vaccination.
+
+Next, examine the nested for loops. They loop over all combinations of 2 numbers i and j. The index i goes from 0 to 19 and is divided by 40. This means that the parameter it sets is in the range of 0.0 to just under 0.5. It is related to p_vax (coverage). Your answer to the simple threshold analysis explains why we use this range. The other parameter j is related to p_imm_vax (efficacy) and is 1 – values from 0.0 to just under 0.5 – p_imm_vax ranges from 100% (perfect vaccination) to 50% efficacy. **Select and run the rest of the code in the section including the heatmap plot of the results.**
+
+```{r}
+###### Section 7: Multi-way sensitivity analysis
+#i_matrix and j_matrix added to figure out how the heatmap plots things
+
+call_ode(params = parameters_vaxperf)
+call_ode(params = parameters_vaximperf)
+call_ode(params = parameters_novax)
+
+results_matrix = matrix(0, nrow=20, ncol=20)
+i_matrix = matrix(0, nrow=20, ncol=20)
+j_matrix = matrix(0, nrow=20, ncol=20)
+for(i in 0:19) {
+  for(j in 0:19) {
+    curr_params <- parameters_novax
+    curr_params[5] = i/40
+    curr_params[6] = 1 - j/40
+    results_matrix[i+1,j+1] = call_ode(curr_params)
+    i_matrix[i+1, j+1] = i
+    j_matrix[i+1, j+1] = j
+  }
+}
+
+matrix.heatmap(results_matrix)
+matrix.heatmap(i_matrix)
+matrix.heatmap(j_matrix)
+```
+
+
+The heat map plots things a little strangely. Note the changes from the original version of this homework: the upper *left* is i=0 and j=0. The upper *right* is i=0 and j=19. The lower *left* is i=19 and j=0. So this means the upper right is 0\% coverage, *50\%* efficacy. The lower right is 50\% coverage and 50\% efficacy. The lower left is 50\% coverage and 100\% efficacy. The upper left is 0\% coverage *100\%* efficacy.
+
+*Question 9: Notice how the colors in the graph form curves. What does this tell us about combinations of coverage and efficacy? If increasing coverage and increasing efficacy cost the same amount and you had a limited budget, what combination of increases would you choose and why?*
+Cumulative infection time is highest in the upper right (0\% coverage, 50\% efficacy) and lowest in the lower left (50\% coverage, 100\% efficacy). Efficacy increases from right to left and coverage increases from top to bottom. Bands of the same color can be intepreted as achieving a given cumulative infection time as a result of varying combinations of coverage and efficacy (level sets). We would choose the minimum cumulative infection time for a given budget. If coverage and efficacy cost the same, we would choose to improve both coverage and efficacy at the same time rather than focusing heavily on one over the other. 
+
+If a percentage point increase in efficacy costs the same as a percentage point increase in coverage, our budget constraint b can be graphed as a line, price\*coverage+price\*efficacy=b, or coverage=(b/price)-efficacy. The optimal mix of efficacy and coverage will be the point on the graph where the budget constraint (which has slope -1) is tangent to a color band - this will be the maximum impact achievable for our budget b. 
+
+Finally, in the model equations, we can see that the rate into the V compartment is coverage\*efficacy. We would want to maximize the rate into the V compartment, coverage\*efficacy, such that price\*coverage+price\*efficacy=budget. The solution to this simple constrained optimization problem is: coverage=efficacy=budget/(2\*price). 
+
+Note that this particular graph shows coverage from 0-50% and efficacy from 50-100%, so if you were constrained to these values you would max coverage out (to 50%) before focusing on efficacy. However, if the range for both were 0-100% you would choose equal levels of both coverage and efficacy. 
+
+## Section 8:
+
+This section deals with waning vaccine-induced immunity. Run the code and examine the plot and the 4 numbers produced in the console output.
+
+```{r}
+###### Section 8: Waning Immunity and Challenge opportunity
+
+parameters_vaximperfwane <- c(birth     = birth, # birth rate
+                          death     = death, # death rate = birth rate so stable population
+                          beta      = 0.4,   # trasmission rate
+                          recover   = 0.2,   # recovery rate
+                          p_vax     = 0.1,   # proportion of infants vaccinated
+                          p_imm_vax = 0.4,   # probability of immunity conditional on vaccination
+                          waning    = 0.5    # waning rate for vaccine induced immunity
+)
+
+output_vaximperfwane <- ode(y = state, times = times, func = OpenSIRVax, parms = parameters_vaximperfwane)
+show_SIR_model_results(output_vaximperfwane)
+
+call_ode(params = parameters_vaxperf)
+call_ode(params = parameters_vaximperf)
+call_ode(params = parameters_vaximperfwane)
+call_ode(params = parameters_novax)
+
+#### If you want a CHALLENGE, try coding and running a 2-way sensitivity
+#### analysis of waning vs. p_imm_vax. What do you notice
+```
+
+*Question 10: For imperfect waning-immunity vaccination, what is the peak prevalence of infectious individuals? At what time t does it occur approximately? What is the equilibrium prevalence? How does this compare to perfect vaccination?*
+The peak prevalence and timing with 10% coverage of a vaccine with 40% efficacy and waning that occurs after 2 years on average is very close to (but slightly lower than) peak prevalence without any vaccine at all, at 12.1% prevalence (12,080 infections at t=76). Equilibrium prevalence is similar (7.4% prevalence, compared to 7.5% without any vaccination). Prevalence is much higher than with perfect vaccination. This finding makes intuitive sense: 10% coverage is low, 40% efficacy is low, and 2 years duration of immunity is quite short. 
+
+```{r}
+peak_prev <- max(data.frame(output_vaximperfwane)$Y)
+peak_prev
+peak_prev/sum(state)
+
+peak_prev_t <- data.frame(output_vaximperfwane)$t[data.frame(output_vaximperfwane)$Y==peak_prev]
+peak_prev_t
+
+eq_prev <- data.frame(output_vaximperfwane)$Y[450]
+eq_prev
+eq_prev/sum(state)
+```
+
+*OPTIONAL: Try to code and run a two-way sensitivity analysis as suggested by the comment after section 8. Use a range of 0 to 0.5 for the waning rate. Paste the heatmap you produce into the answers you submit.*
+
+Heatmap is below. Top left is 100\% efficacy, 0 waning, top right is 100\% efficacy, maximum waning (after 2 years on average), bottom left is 50\% efficacy, 0 waning, and bottom right is 5\0% efficacy maximum waning. As expected, cumulative infection time is minimized when there is no waning (x axis) and efficacy (y axis) is 100\%. We can observe from this graph that waning dominates the infection dynamics (and thus cumulative infection time) compared to efficacy. At all but the lowest levels of waning (leftmost part of the graph), cumulative infection time is on the high end regardless of efficacy. However, when waning is around 0.1 or less, higher levels of efficacy can substantially reduce cumulative infection time. 
+
+```{r}
+###### Section 8: Multi-way sensitivity analysis of waning and p_imm_vax
+
+results_matrix = matrix(0, nrow=20, ncol=20)
+for(i in 0:19) {
+  for(j in 0:19) {
+    curr_params <- parameters_vaxperf
+    curr_params[6] = 1 - i/40 #efficacy ranges from 50%-100% (bottom to top)
+    curr_params[7] = j/40 #waning ranges from 0 to 0.5 (left to right)
+    results_matrix[i+1,j+1] = call_ode(curr_params)
+  }
+}
+
+matrix.heatmap(results_matrix)
+```
+
+

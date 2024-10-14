@@ -1,0 +1,228 @@
+---
+title: 'Lab 2: Epidemic Growth'
+output:
+  html_document: default
+  pdf_document: default
+---
+
+In this lab, we will examine growth of emerging epidemics, using regional data from the United States. The goals of this lab will be to illustrate the relationship between growth rates and the reproductive number, and how the reproductive number can be estimated from early epidemic growth. We will illustrate alternative approaches to calculating the reproductive number. And we will show how variability in the reproductive nummber is important.
+
+First, we will read in data from the New York Times.
+
+```{r}
+fulldata<-read.csv('https://raw.githubusercontent.com/nytimes/covid-19-data/master/us-counties.csv')
+head(fulldata)
+```
+
+This dataset includes data for every county, and contains a row with cumulative number of cases and deaths reported for each date. Next, we will select the data from Santa Clara county. For this, we will use the **tidyverse** package in R.
+
+```{r, message=FALSE, warning=FALSE}
+library(tidyverse)
+
+#this is how to manipulate data using tidyverse 'pipes'. 'filter' selects observations. 'mutate' creates new variables. we have to define the date variable as being a date with format Year-month-day.
+data <- fulldata %>%
+  filter(county=="Santa Clara") %>%
+  mutate(date= as.Date(date,"%Y-%m-%d"))
+```
+
+Let's visualize the number of cases looked like in the first 4 weeks.
+
+```{r}
+
+#first, create a dataset containing just the observations for the first 4 weeks
+data.early <- data %>%
+  filter(date >= as.Date("2020-03-01","%Y-%m-%d")) %>%
+  filter(date <= as.Date("2020-03-28","%Y-%m-%d")) 
+
+#create a bar plot
+data.early %>%
+  ggplot(aes(x=date,y=cases)) + geom_bar(stat='identity',fill='darkblue') + theme_bw()
+ 
+```
+
+Does this look like consistent expoential growth? If so, the cases should grow linearly on the log scale. Let's plot the cases on the log scale with a best fit of the line.
+
+```{r}
+#plot the cases on the log scale
+data.early %>%
+  ggplot(aes(x=date,y=cases)) + geom_point() + theme_bw() + scale_y_continuous(trans='log', breaks=c(1,10,100,1000))
+
+```
+
+It looks linear, but let's plot a regression line and see.
+
+```{r}
+#here we plot again on log scale but use 'stat_smooth' with a linear model ('lm')
+data.early %>%
+  ggplot(aes(x=date,y=cases)) + geom_point() + theme_bw() +
+  stat_smooth(method = "lm", formula = y ~ x) + scale_y_continuous(trans='log', breaks=c(1,10,100,1000)) 
+
+```
+
+That looks like a pretty good fit. Let's inspect the regression more closely.
+
+```{r}
+#run a linear regression with outcome of log(cases) and time (date) as the predictor
+model1 <- lm(log(cases) ~ date, data=data.early)
+summary(model1)
+```
+
+Here, the growth rate (slope) is the regression coefficient for 'date', which is 1.616e-01 (i.e. 0.16 or 16% per day). The R-squared is 0.9858, which is high.
+
+So there appeared to be exponential growth early on. Here's let's examine the fit on the regular scale.
+
+```{r}
+
+#the growth rate is the coefficient for date
+growthrate= coef(model1)[2]
+#start with the initial number of cases in the series
+initialcases= data.early$cases[1]
+
+ggplot() + 
+  geom_point(data=data.early,aes(x=1:28,y=cases)) +
+  geom_line(aes(x=1:28,y=initialcases*exp((1:28)*growthrate)),color='blue') + theme_bw() + 
+  scale_x_continuous(breaks=seq(1,28,7),labels=seq(as.Date('2020-03-01'), as.Date('2020-03-28'), by = "7 days")) + xlab("")
+
+
+```
+
+What did the early growth rate look like by state in the country? Let's look at the log cases by time for the 12 states with the largest number of cases.
+
+```{r,message=FALSE}
+#select the top 12 states by cases
+topstates<- fulldata %>%
+  mutate(date= as.Date(date,"%Y-%m-%d")) %>%
+  filter(date == as.Date("2020-04-25","%Y-%m-%d")) %>%
+  group_by(state) %>%
+  summarise(n=sum(cases)) %>%
+  arrange(desc(n)) %>%
+  top_n(12)
+
+#we sum the cases across county by state
+fulldata %>% 
+  filter(state %in% topstates$state) %>%
+  mutate(date= as.Date(date,"%Y-%m-%d")) %>%
+  filter(date >= as.Date("2020-03-01","%Y-%m-%d")) %>%
+  group_by(state,date) %>%
+  summarise(n=sum(cases)) %>%
+  ggplot(aes(x=date,y=n)) + geom_line() + theme_bw() + 
+  scale_y_continuous(trans='log',breaks=c(10^(1:6))) + ylab('cases') +
+  facet_wrap(~state)
+
+```
+
+
+
+## Estimating the Reproductive Number ($R_0$)
+
+Now that we have the growth rate, we can estimate $R_0$, assuming we know the latent and infectious periods. Let's assume that the latent period (L) is 3 days and the infectious period (D) is 4 days. Now, we can use the equation: $R_0 = (1 + \Lambda D)(1 + \Lambda L)$
+
+```{r}
+L=3
+D=4
+r= as.numeric(coef(model1)[2]) #0.16
+R0= (1+L*r)*(1+D*r)
+print(paste0("R0: ",round(R0,2)))
+```
+
+Did Santa Clara's epidemic continue to have this same reproductive number, and therefore growth rate, in April? If so, how many cases would it have had?
+
+```{r}
+
+#here we plot the cases along with the exponential growth from the first four weeks, projected forward
+data %>% 
+  filter(date >= as.Date("2020-03-01","%Y-%m-%d")) %>%
+  filter(date <= as.Date("2020-04-25","%Y-%m-%d")) %>%
+  ggplot() + geom_point(aes(x=1:56,y=cases)) +
+  geom_line(aes(x=1:56,y=initialcases*exp((1:56)*growthrate)),color='blue') + theme_bw() + 
+  scale_x_continuous(breaks=seq(1,56,7),labels=seq(as.Date('2020-03-01'), as.Date('2020-04-25'), by = "7 days")) + xlab("")
+
+
+```
+
+This is a lesson in how projections based on fits to early data can go awry. The model fit very well for the first month, but the conditions changed. Let's look at cases on the log scale, and estimate the growth rate for March versus April.
+
+```{r}
+
+#we define and early and late period, and then plot them in pieces, with regression line in pieces.
+data %>%
+  filter(date > as.Date("2020-03-01","%Y-%m-%d")) %>%
+  mutate(period = case_when(date <= as.Date("2020-03-31","%Y-%m-%d") ~ 'early',
+         date > as.Date("2020-03-31","%Y-%m-%d") ~ 'late')) %>%
+  ggplot(aes(x=date,y=cases,color=period)) + geom_point() + theme_bw() + scale_y_continuous(trans='log',breaks=c(1,10,100,1000)) + 
+  stat_smooth(method = "lm", formula = y ~x) 
+
+```
+
+The growth rate (slope) changed quite a bit, and it looks like it's still declining. Let's calculate the $R_0$ for April (to date) and compare it to what we estimated for the the first month. First we'll fit a regression of log cases against time to estimate the growth rate. Then we'll again use our equation for $R_0$ as above.
+
+```{r}
+
+data.late <- data %>%
+  filter(date >= as.Date("2020-04-01","%Y-%m-%d")) %>%
+  filter(date <= as.Date("2020-04-25","%Y-%m-%d")) 
+
+model2 <- lm(log(cases) ~ date, data=data.late)
+L=3
+D=4
+r= as.numeric(coef(model2)[2])
+print(paste0("r: ",round(r,2)))
+R0= (1+L*r)*(1+D*r)
+print(paste0("R0: ",round(R0,2)))
+
+```
+
+The reproductive number for April was half of that in March! And even that appears to be overestimating at the end of the time series. What we would really like is a continuous measure of the reproductive number ($R_t$). This is what the Wallinga-Teunis method delivers. Let's apply that to the Santa Clara data. First let's plot new cases by day.
+
+```{r, message=FALSE, warning=FALSE}
+#define the first date of the series
+first.date<-  as.Date("2020-02-28","%Y-%m-%d")
+
+library(R0)
+
+#create a dataset from the first date through April 25
+data.march.april <- data %>%
+    filter(date >= first.date) %>%
+  filter(date <= as.Date("2020-04-25","%Y-%m-%d")) 
+
+#we need to transform cumulative cases into incidence
+case.inc<- check.incid(diff(data.march.april$cases), date.first.obs=first.date+1, time.step=1)
+
+ggplot() + geom_bar(aes(x=case.inc$t,y=case.inc$incid),stat='identity') + theme_bw() + ylab('cases') +
+  xlab('')
+```
+
+
+Now let's plot the $R_t$.
+
+```{r, message=FALSE, warning=FALSE}
+mGT<-generation.time("gamma", c(5.8, 3)) #this is the generation interval, defined as a gamma distribution with a mean of 5.8 days
+R0.res<-est.R0.TD(epid=case.inc$incid,GT=mGT)
+
+result <- data.frame(R= R0.res$R, lowCI= R0.res$conf.int[,1], highCI= R0.res$conf.int[,2],
+                     time= case.inc$t[1:length(R0.res$R)])
+
+ggplot(result,aes(x=time,y=R)) + geom_smooth(aes(ymin=lowCI,ymax=highCI),fill='blue',alpha=0.2) + theme_bw() + geom_hline(yintercept=1, linetype="dashed", color = "red", size=1) + 
+  geom_vline(xintercept=as.Date("2020-03-17","%Y-%m-%d"),linetype='dashed',color='black',size=1) +
+  annotate("text",x=as.Date("2020-03-20","%Y-%m-%d"),y=4.8,label='Shelter Order') +
+  scale_y_continuous(breaks=c(0:100)) 
+
+```
+
+The $R_t$ appears to be high in early March, but would caution against overinterpreting this given the beginning of a time series and small numbers of cases. 
+
+## Homework
+
+For homework:
+
+- Redo the above analyses, but instead for New York City (county "New York City"). What were the early growth rate and $R_0$ in New York City?
+- The $R_t$ analysis will not run, so try changing the start date (variable first.date) to March 7. Note that the shelter order for New York City began on March 20 rather than March 17
+- What would happen if we assumed a longer or shorter serial (generation) interval? Try doubling the generation time (currently 5.8 days) or making it half as long. What does this do to $R_t$? Describe the change.
+
+
+
+
+
+
+
+

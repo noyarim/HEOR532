@@ -1,0 +1,187 @@
+---
+title: 'Lab 4: Parameter Estimation and Uncertainty Analysis'
+output:
+  html_document: default
+  pdf_document: default
+---
+
+First, let's read in the packages we will need. 
+
+```{r, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(deSolve)
+#uncomment the next line if you need to install mvtnorm.
+#install.packages("mvtnorm") 
+library(mvtnorm)
+
+```
+
+# Question 1. 
+- Download a dataset on a measles outbreak in 3 communities in Niaemy, Niger (code below)
+- Assume the population size (N) is 50,000 and that 80% of the population starts off vaccinated (note: added via Canvas announcement)
+- Refit the SIR model to community B
+- Estimate $\beta$ and $\gamma$ for this community
+- Describe your findings
+- You should only need to change numbers in the above model (e.g. the duration of observation differs)
+
+- Download a dataset on a measles outbreak in 3 communities in Niaemy, Niger
+```{r}
+niamey <- read.csv("http://kingaa.github.io/short-course/parest/niamey.csv")
+niamey.b = niamey %>% filter(community=="B")
+
+#let's take a look at the data
+head(niamey.b)
+
+#it looks like the time step is biweekly, indicated by the "biweek" variable, and measles cases are indicated by the "measles" variable
+
+#let's generate a day variable (so that the first case starts on day 1) to make this data a little easier to work with/interpret
+#niamey.b <- niamey.b %>% mutate(day=3.5*biweek-2.5)
+
+#plot the data
+ggplot() +
+  xlab('Time (biweekly)') +
+  ylab('Count') + 
+  geom_point(data=niamey.b,aes(x=biweek,y=measles)) + theme_bw()
+
+```
+
+- Assume the population size (N) is 50,000 and that 80% of the population starts out vaccinated
+```{r}
+ClosedXYZ<-function(t, state, parameters) {
+  with(as.list(c(state, parameters)),{
+    N = X + Y + Z
+    dX <- -beta*X*Y/N 
+    dY <- beta*X*Y/N - gamma*Y
+    dZ <- gamma*Y
+    list(c(dX, dY, dZ))
+  }) 
+}
+
+state <- c(X = 4999, Y = 1, Z = 45000)
+
+times <- seq(0, 16, by = 0.5)
+```
+We can use the same ClosedXYZ model from the in-class portion of this lab. However, we adjust the *state* vector for a population size of 50,000 (with 80% vaccination coverage), and the *times* vector to account for the 16 data points in the dataset (16 biweeks = 8 weeks = 56 days, choose a time step of 0.5 to match to half days implied by biweekly observations).
+
+- Refit the SIR model to community B
+- Estimate $\beta$ and $\gamma$ for this community
+```{r}
+#As in class, select a sequence of 20 values for beta and gamma across a plausible range
+n= 20
+betalist= seq(4.0,20.0,length=n)
+gammalist= seq(0.01,1,length=n)
+
+#Here we evaluate the first combination to create our dataframe
+parameters <- c(beta= betalist[1],gamma= gammalist[1])
+output <- ode(y = state, times = times, func = ClosedXYZ, parms = parameters)
+results<- data.frame(output,beta= rep(betalist[1],length(times)),
+                     gamma=rep(gammalist[1],length(times)))
+
+#now we loop off the 400 combinations of beta and gamma
+for (i in 1:n){
+  for (j in 1:n){
+    parameters <- c(beta= betalist[i],gamma= gammalist[j])
+    output <- ode(y = state, times = times, func = ClosedXYZ, parms = parameters)
+    output<- data.frame(output,beta= rep(betalist[i],length(times)),
+                         gamma=rep(gammalist[j],length(times)))
+    results= rbind(results,output)  
+  }
+}
+```
+How do we define a plausible range for $\beta$ and $\gamma$? We could start with a very wide range and gradually narrow the range based on the results from initial calibration, like we did in class. We could also base $\beta$ and $\gamma$ off of other epidemiological studies and models of measles. Keeling and Rohani report an estimate $\R_0$ of measles of 16-18 (Table 2.1 on page 21) and an estimate of the average duration of infectiosness of 5 days (page 102, although this is in the context of an SEIR model). An $\R_0$ of 17 and a $\gamma$ of 1/5 imply a $\beta$ of 3.4. We explore a wide range around these estimates to start.
+
+First, let's look at the range of $\beta$ with an intermediate level of $\gamma$.
+```{r}
+#examine beta while keeping gamma constant
+ggplot(subset(results,gamma==gammalist[10]),aes(x=time,y=Y,color=as.factor(beta))) + 
+  geom_line() + theme_bw() + scale_color_discrete(name="beta")
+```
+
+Now let's examine a range of $\gamma$ while holding $\beta$ constant.
+```{r}
+ggplot(subset(results,beta==beta[10]),aes(x=time,y=Y,color=as.factor(gamma))) + 
+  geom_line() + theme_bw() + scale_color_discrete(name="gamma")
+```
+
+
+Define our likelihood function to take combinations of $\beta$ and $\gamma$, as in class
+```{r}
+poisson.loglik <- function (b,g) {
+  res <- results %>% filter(times %in% niamey.b$biweek & beta==b & gamma==g)
+  Y= res$Y
+  sum(dpois(x=niamey.b$measles,lambda=Y,log=TRUE))
+}
+```
+We specify that the log likelihood should be calculated for the time steps in the model output that match the time steps in the data. These are the time steps contained in the *days* column of *niamey.b*. Note that we do not match to every day, just days 1, 4.5, 8, and so on. 
+
+Now we are ready to visualize the likelihood surface for these combinations of $\beta$ and $\gamma$. We'll do that by creating a two dimensional contour map, where the x-axis will be $\beta$, the y-axis will be $\gamma$, and the colors will signify the log likelihood values (higher values are a better fit).
+
+```{r}
+grid <- expand.grid(b=betalist,g=gammalist)
+grid <- plyr::ddply(grid,~b+g,mutate,loglik=poisson.loglik(b,g))
+grid <- subset(grid,is.finite(loglik))
+
+ggplot(grid,aes(x=b,y=g,z=loglik)) +
+  geom_contour_filled(breaks= -exp(seq(9,0,-0.2))) + scale_x_continuous(expand = c(0,0)) +
+  scale_y_continuous(expand=c(0,0)) + xlab("beta") + ylab("gamma") +
+  labs(fill = "Log Likelihood")
+```
+The highest likelihood occurs when beta is in the range of 2.5-4 and gamma is in the range of 0.3 to 0.5. Now let's narrow our gamma and beta range based on these initial results and rerun calibration.
+```{r}
+n= 20
+betalist= seq(15,17,length=n)
+gammalist= seq(0.7,0.95,length=n)
+
+parameters <- c(beta= betalist[1],gamma= gammalist[1])
+output <- ode(y = state, times = times, func = ClosedXYZ, parms = parameters)
+results<- data.frame(output,beta= rep(betalist[1],length(times)),
+                     gamma=rep(gammalist[1],length(times)))
+#now we loop off the 400 combinations of beta and gamma
+for (i in 1:n){
+  for (j in 1:n){
+    parameters <- c(beta= betalist[i],gamma= gammalist[j])
+    output <- ode(y = state, times = times, func = ClosedXYZ, parms = parameters)
+    output<- data.frame(output,beta= rep(betalist[i],length(times)),
+                         gamma=rep(gammalist[j],length(times)))
+    results= rbind(results,output)  
+  }
+}
+
+grid <- expand.grid(b=betalist,g=gammalist)
+grid <- plyr::ddply(grid,~b+g,mutate,loglik=poisson.loglik(b,g))
+grid <- subset(grid,is.finite(loglik))
+
+ggplot(grid,aes(x=b,y=g,z=loglik)) +
+  geom_contour_filled(breaks= -exp(seq(9,0,-0.2))) + scale_x_continuous(expand = c(0,0)) +
+  scale_y_continuous(expand=c(0,0)) + xlab("beta") + ylab("gamma")
+  labs(fill = "Log Likelihood")
+```
+
+It looks like beta=3.25, gamma=0.4 is a pretty good fit. We could use these values or find the exact values by looking for the maximum log likelihood in the *grid* dataframe. Let's run the model using these parameters and plot them against the Niamey data. 
+
+If we wanted, we could also rerun calibration again and see if we can obtain an even better fit. However, there is a limit on how perfect of a fit we can obtain using a simple SIR model. 
+```{r}
+beta_best <- grid$b[which.max(grid$loglik)]
+gamma_best <- grid$g[which.max(grid$loglik)]
+print(beta_best)
+print(gamma_best)
+
+parameters <- c(beta=beta_best, gamma=gamma_best)
+
+output <- ode(y = state, times = times, func = ClosedXYZ, parms = parameters)
+results <- data.frame(output)
+
+ggplot() + geom_point(data=niamey.b,aes(x=biweek,y=measles, color="Data")) +
+  geom_point(data=results, aes(x=time, y=Y, color="Model Output")) +
+  labs(x="Time (days)", y="Case Count", color="") + theme_bw()
+
+```
+
+
+- Describe your findings
+The best-fitting beta and gamma from calibration with a closed SIR model were 3.21 and 0.41, respectively. These parameter values imply that $\R_0$ is 7.8 and that the average duration of infectiousness is 2.4 days. Compared to what we know about measles, this seems like a low $\R_0$ and a very short duration of infectiousness. There are several possible explanations for this, including (but not limited to): 1) We force the data to fit a closed SIR model, but the real infection dynamics of measles are likely more complex (for example there is an exposed period when individuals are not yet infectious or symptomatic and thus an SEIR model may be more appropriate). Other added complications could include case detection, lags in detection, etc. 2) We chose 80% baseline vaccination coverage, but in practice this value may be higher. If I try rerunning the above code with 90% of the population starting off immune, the resulting best-fitting beta is higher and the gamma is lower, implying longer duration of infection and higher R0, which aligns better with our prior beliefs about these parameters. This is one reason why we would want to base the proportion of the population starting off immune on data (or calibrate it). 
+
+Additionally, the best-fitting beta and gamma from calibration underestimate the number of cases at the infection's peak. This could be explained by some of the above factors (a more realistic model or different initial compartment sizes may result in calibrated parameters with better fit) as well as randomness and noise. Models will rarely achieve a perfect fit to calibration targets. 
+
+Finally, we assume in this calibration that the biweekly cases are prevalent cases observed on the day of reporting. However, it may be more reasonable to assume these are cumulative cases over the past biweek. In practice, this is generally something you would know about your data. 
+

@@ -1,0 +1,552 @@
+---
+
+---
+```{r}
+knitr::opts_chunk$set(message = TRUE, warning=TRUE, error=TRUE)
+```
+
+
+
+
+
+
+
+
+
+
+0. Review of Basics
+
+```{r}
+
+
+test <- function() {
+  
+  return()
+}
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+1. Load packages
+```{r} 
+#if you are installing packages for the first time:
+#install.packages("deSolve")
+#install.packages("ggplot2")
+
+library(deSolve) #differential equation solver
+library(ggplot2) #plotting package
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+2. Start by defining a vector of model parameters (e.g. effective contact rate, recovery rate) and a vector of initial compartment sizes (often 1 infected person and the rest susceptible). We also define a vector of time steps corresponding to how long we want to run the model.
+
+```{r}
+parameters <- c(beta = 0.5, #effective contact rate (aka transmission rate)
+                gamma = 0.3 #recovery rate (1/duration infection)
+)
+
+state <- c(S = 99999, #population of 100,000, 1 person starts of infected
+           I = 1, 
+           R = 0
+)
+
+T_end <- 500 #run model for 500 time steps
+times <- seq(0, T_end, by = 1) #runs the model for 500 time steps, and computes output at each time step 
+```
+
+Note: Your time steps could be days, months, years - but make sure time step size matches time scale of parameters. For example, if your time step is days, make sure you are using daily rates. 
+
+Note: by naming the components of state (e.g. S=99999), and parameters (e.g. beta=0.5), R can match them with the names of parameters and states in your SIR model function (BasicSIR) below.   
+ 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+3. Define SIR (and related) model functions. These will be used with the deSolve package to simulate how your population moves between compartments (e.g. Susceptible, Infected, Recovered) over time, given a set of parameters and the initial compartment sizes that we defined in step 2. We'll start by writing a function for a basic SIR model without demography. For this and all subsequent models, we will assume frequency dependence (not density dependence).
+```{r}
+BasicSIR<-function(t, state, parameters) {
+  with(as.list(c(state, parameters)),{ #this tells R that "S" refers to the "S" in the "state" vector, "beta" refers to the "beta" in "parameters", etc.
+    
+    N = S + I + R #define N (total population size)
+    
+    #SIR model equations from lecture - rates of change in and out of each compartment 
+    dS <- -beta*S*I/N
+    dI <- beta*S*I/N - gamma*I
+    dR <- gamma*I
+    
+    #return the rates of change as a list
+    list(c(dS, dI, dR)) 
+  })
+}
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+4. We've defined our SIR model function and its inputs. Now we can run it using the ode() function that is part of the deSolve package.
+```{r}
+output <- ode(y = state, times = times, func = BasicSIR, parms = parameters)
+```
+Note: ode() is a function in the deSolve package. You must fill it in using the syntax: "ode(y= [vector of initial compartment sizes], times = [vector of time steps], func = [name of SIR model function], parms = [vector 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+5. We can examine the model output by typing "View(output)" in the console, clicking on "output" in the Environment (top right of RStudio), or printing model output to the console. It is often easier to examine model output by plotting. We start by defining a function that will do basic cleaning and plot the epidemic curve of our model output from step #4. 
+```{r}
+show_SIR_model_results<-function(output) {
+    df1 <- data.frame(output)
+    ggplot() + 
+        geom_line(data = df1, aes(x = time, y = S), color = "blue") +
+        geom_line(data = df1, aes(x = time, y = I), color = "red") +
+        geom_line(data = df1, aes(x = time, y = R), color = "green") +
+        xlab('Time') +
+        ylab('Count') 
+}
+
+show_SIR_model_results(output)
+
+print(output[200:204,]) #prints rows 200 through 204, all columns
+print(head(output)) #head(object, x) refers to the first x rows of an object (default is 5 rows)
+print(tail(output)) #tail(object, x) refers to the last x rows of an object (default is 5 rows)
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+6. What is the basic reproductive number, R0, for this model? What is the population prevalence at t=50? Is there an endemic equilibrium? Why/why not? 
+```{r eval=FALSE, include=FALSE}
+#calculate R0
+R0 <- parameters["beta"]/parameters["gamma"]
+print(R0)
+
+#model-predicted prevalence at t=50
+output_df <- data.frame(output)
+output_df$N <- output_df$S + output_df$I + output_df$R
+print(output_df$I[50]/output_df$N[50])
+
+S_star <- output_df$S[T_end+1]/output_df$N[T_end+1]
+Rt_star <- R0*S_star
+I_star <- output_df$I[T_end+1]/output_df$N[T_end+1]
+
+print(Rt_star)
+print(I_star)
+
+#The basic reproductive ratio is 1.67. The population prevalence at t=100 is 7.8% (meaning 7.8% of the population is infected during that time). The effective reproductive ratio at equilibrium is 0.54, which is less than 1, meaning that there will be no endemic equilibrium. This can observed from calculating the prevalence at the end of the model or observing the graph in part 5. In this case, there is no endemic equilibrium because there is no demography, so the population of susceptibles declines to a level at which the effective reproductive number is less than 1. 
+#<br /> <br /> 
+```
+
+
+7\. How does the basic reproductive number change if we change beta to parameterize a contact rate (k) of 10 contacts per unit time and a 20% probability of infection per contact (p)? How do you expect this to change the initial epidemic dynamics and proportion of the population that gets infected? Plot the epidemic curve graph with this new beta and compare against your prediction. 
+```{r eval=FALSE, include=FALSE}
+parameters <- c(beta = 0.2, #0.2 is 10*20%
+                gamma = 0.3
+)
+R0 <- parameters["beta"]/parameters["gamma"]
+print(R0)
+output <- ode(y = state, times = times, func = BasicSIR, parms = parameters)
+show_SIR_model_results(output)
+
+#The new beta equals 20% * 10, or 0.2. At beta=0.2 and gamma=0.3, the basic reproductive ratio is 0.67, which is less than 1. Thus we do not expect an epidemic to occur. This is confirmed in the graph.
+#<br /> <br /> 
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+8\. If we wanted to model a chronic infectious disease, what type of model would we use instead? Is there a way to model this using the BasicSIR function or do we need to write a new model function? Generate the epidemic curve plot for a chronic disease with beta=0.5. Does the population get infected faster or slower than in the previous version (part 5) and do more or fewer people get infected? Conceptually, why is this?
+```{r}
+parameters <- c(beta = 0.5,
+                gamma = 0.0
+)
+output <- ode(y = state, times = times, func = BasicSIR, parms = parameters)
+show_SIR_model_results(output)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+9\. Now let's add demography. To do this, we need to write a new model function (hint - use the OpenSIR function) that includes births and deaths and we need to define additional parameters
+```{r}
+OpenSIR<-function(t, state, parameters) {
+  with(as.list(c(state, parameters)),{
+    N = S + I + R
+    
+    #SIR w/ demography equations from lecture
+    dS <- -beta*S*I/N + birth*N - death*S + omega*R
+    dI <- beta*S*I/N - death*I - gamma*I
+    dR <- gamma*I - death*R - omega*R
+    
+    # return the rates of change as a list
+    list(c(dS, dI, dR))
+  })
+}
+
+parameters <- c(beta = 0.5, #effective contact rate (aka transmission rate)
+                gamma = 0.3, #recovery rate (1/duration infection)
+                birth = 0.03, #birth rate (per capita)
+                death = 0.03, #all-cause mortality rate
+                omega = 0.0
+)
+
+```
+In addition to births and deaths, we've added another new parameter - omega. We'll set omega to 0 for now, but what does omega represent?  
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+10\. Calculate R0 and the compartment sizes at the endemic equilibrium. Do we expect the system to reach the endemic equilibrium or the disease-free equilibrium, and why? Did R0 increase or decrease compared to the BasicSIR model (without demography - part 6)? What is your intuition behind this? 
+```{r eval=FALSE, include=FALSE}
+R0 <- parameters["beta"]/(parameters["gamma"] + parameters["death"])
+print(R0)
+
+S_star <- 1/R0
+I_star <- (parameters["death"]/parameters["beta"])*(R0-1)
+R_star <- 1-(S_star + I_star)
+print(c(S_star, I_star, R_star))
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+11\. Plot the epidemic curve of this new model and examine the modeled equilibrium compartment sizes. Compare this against your prediction.
+```{r}
+output <- ode(y = state, times = times, func = OpenSIR, parms = parameters)
+show_SIR_model_results(output)
+
+output_df <- data.frame(output)
+output_df$N <- output_df$S + output_df$I + output_df$R
+print(output_df$I[T_end+1]/output_df$N[T_end+1])
+
+show_SIR_I_output <- function(output) {
+    df1 <- data.frame(output)
+    ggplot() + 
+        geom_line(data = df1, aes(x = time, y = I), color="red") +
+        xlab('Time') +
+        ylab('Count') 
+}
+
+show_SIR_I_output (output)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+12\. We can also plot the phase diagram (prevalence of S against prevalence of I) to observe how the system reaches equilibrium (as we showed in lecture 3). We define an additional graphing function for this - phase_diagram().
+```{r}
+phase_diagram <-function(output) {
+  #convert model output to a data frame (type of object in R) and reshape it so that each row represents a time-compartment combination (e.g. how many ppl in S compartment at time 10) - the latter just makes it easier to plot your results
+  df1 <- data.frame(output)
+  df1$N <- df1$S + df1$I + df1$R
+  df1[,2:ncol(df1)] <- df1[,2:ncol(df1)]/df1$N #divide by pop size to calculate pop prevalence
+  ggplot() + 
+    geom_point(data = df1, aes(x = S*100, y = I*100, color=time)) + #plot S_prev against I_prev
+    xlab('Susceptible Prevalence (%)') + ylab('Infected Prevalence (%)') + #label x and y-axes
+    theme_bw() #this isn't necessary but makes the graph look a bit nicer
+} 
+phase_diagram(output)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+13\. Calculate the approximate average age of infection for this model and the approximate period of oscillation. Does the estimated period of oscillation look similar to the oscillation in the graph from question 11? Assume that time steps (and rates) are in months. 
+```{r eval=FALSE, include=FALSE}
+A <- 1/(parameters["death"]*(R0-1))
+print(A)
+
+G <- 1/(parameters["death"]+parameters["gamma"]) #duration of infectiousness
+T <- 2*pi*sqrt(A*G)
+print(T)
+
+```
+
+
+14\. One at a time (holding all other parameters fixed), make the following changes:
+  a.) change beta to 2.0 (keep gamma at 0.3, births and deaths at 0.03)
+  b.) change gamma to 0.2 (keep beta at 0.5, births and deaths at 0.03)
+  c.) change births and deaths (both) to 0.1 (keep beta at 0.5 and gamma at 0.3). 
+Plot the resulting epidemic curves and phase diagrams. How do these changes affect the infection dynamics? Why?
+```{r eval=FALSE, include=FALSE}
+#plotting function that is technically more complex but can be applied to all model output (not just SIR)
+show_model_results<-function(output) {
+  #convert model output to a data frame (type of object in R) and reshape it so that each row represents a time-compartment combination (e.g. how many ppl in S compartment at time 10) - the latter just makes it easier to plot your results
+  df1 <- data.frame(output)
+  df2 <- reshape(df1, varying=colnames(df1)[2:ncol(df1)], 
+                 v.name="sizes",  timevar="Compartment",
+                 times=colnames(df1)[2:ncol(df1)], idvar="time", direction="long")
+  ggplot() + 
+    geom_line(data = df2, aes(x = time, y = sizes, color=Compartment)) + #plot the number of ppl in each compartment over time
+    xlab('Time') + ylab('Count') + #label x and y-axes
+    theme_bw() #this isn't necessary but makes the graph look a bit nicer
+} 
+
+#original (for comparison)
+parameters <- c(beta = 0.5, #effective contact rate (aka transmission rate)
+                gamma = 0.3, #recovery rate (1/duration infection)
+                birth = 0.03, #birth rate (per capita)
+                death = 0.03, #all-cause mortality rate
+                omega = 0.0
+)
+output <- ode(y = state, times = times, func = OpenSIR, parms = parameters)
+show_model_results(output)
+phase_diagram(output)
+
+parameters["beta"] <- 2.0
+output <- ode(y = state, times = times, func = OpenSIR, parms = parameters)
+show_model_results(output)
+phase_diagram(output)
+
+parameters["beta"] <- 0.5
+parameters["gamma"] <- 0.2
+output <- ode(y = state, times = times, func = OpenSIR, parms = parameters)
+show_model_results(output)
+phase_diagram(output)
+
+parameters["gamma"] <- 0.3
+parameters["birth"] <- 0.1
+parameters["death"] <- 0.1
+output <- ode(y = state, times = times, func = OpenSIR, parms = parameters)
+show_model_results(output)
+phase_diagram(output)
+```
+
+15\. Let's revisit the omega parameter we added to OpenSIR. This parameter represents waning immunity (recall - when omega=0, immunity is lifelong). What type of model do we have as omega approaches infinity? 
+
+
+16\. Set omega to equal 0.1. Run the model and plot the resulting epidemic curve. What do you notice? Has the R0 changed (from part 10)? If not, how do you explain the difference in output? (hint: think closely about the definition of R0)
+```{r eval=FALSE, include=FALSE}
+parameters <- c(beta = 0.5, #effective contact rate (aka transmission rate)
+                gamma = 0.3, #recovery rate (1/duration infection)
+                birth = 0.03, #birth rate (per capita)
+                death = 0.03, #all-cause mortality rate
+                omega = 0.1
+)
+output <- ode(y = state, times = times, func = OpenSIR, parms = parameters)
+show_model_results(output)
+
+output_df <- data.frame(output)
+output_df$N <- output_df$S + output_df$I + output_df$R
+print(output_df$I[T_end+1]/output_df$N[T_end+1])
+```

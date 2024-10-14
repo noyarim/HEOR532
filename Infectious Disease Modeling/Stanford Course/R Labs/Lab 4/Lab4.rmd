@@ -1,0 +1,406 @@
+---
+title: 'Lab 4: Parameter Estimation and Uncertainty Analysis'
+output:
+  html_document: default
+  pdf_document: default
+---
+
+In this lab, we will look at how to estimate model parameters from data, and look at an example of uncertainty analysis. Some ideas and components from this lab were informed by excellent series of tutorials by Aaron King, available [here](https://kingaa.github.io/short-course/parest/parest.html). 
+
+First, let's read in the packages we will need. 
+
+```{r, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(deSolve)
+#uncomment the next line if you need to install mvtnorm.
+#install.packages("mvtnorm") 
+library(mvtnorm)
+
+```
+
+## Parameter Estimation with SIR Model
+
+We will start with parameter estimation in SIR models. First, we will read in data from the British boarding school flu outbreak, discussed in Lecture 2, and visualize it.
+
+```{r}
+bsflu_data <- read.table("http://kingaa.github.io/sbied/stochsim/bsflu_data.txt")
+
+ggplot() +
+  xlab('Time (Days)') +
+  ylab('Count') + ylim(0,800) + 
+  geom_point(data=bsflu_data,aes(x=1:14,y=B)) + theme_bw()
+```
+
+We will assume that this outbreak can be described by a SIR model. Here, we will use XYZ because we are modeling absolute case numbers. Let's take a look at the model code, which follows the code from Lab 1, but with XYZ substituted for SIR.
+
+```{r}
+ClosedXYZ<-function(t, state, parameters) {
+  with(as.list(c(state, parameters)),{
+    N = X + Y + Z
+    dX <- -beta*X*Y/N 
+    dY <- beta*X*Y/N - gamma*Y
+    dZ <- gamma*Y
+    list(c(dX, dY, dZ))
+  }) 
+}
+
+state <- c(X = 762, Y = 1, Z = 0)
+
+times <- seq(0, 15, by = 0.1)
+```
+
+We have everything there to run the model except the parameters. Let's assume that the duration of infectiousness is 2.2 days, and we just need to solve for $\beta$. Let's choose a plausible range of values for $\beta$ and examine the model output.
+
+```{r, warning=FALSE}
+n= 25 
+betalist= seq(0.6,3,length=n) #creates a sequence of values 0.6,0.7,0.8... 3.0
+#create our initial set of parameters
+parameters <- c(beta= betalist[1],gamma= 1/2.2)
+#runt he model
+output <- ode(y = state, times = times, func = ClosedXYZ, parms = parameters)
+#label our results with the parameter
+results<- data.frame(output,beta= rep(betalist[1],length(times))) 
+
+#now loop over the remaining parameter sets and add them to the dataframe  
+for (i in 2:n){
+  parameters <- c(beta= betalist[i],gamma= 1/2.2)
+  output <- ode(y = state, times = times, func = ClosedXYZ, parms = parameters)
+  output<- data.frame(output,beta= rep(betalist[i],length(times)))
+  results= rbind(results,output)  
+}
+
+#join these results to the observed flu data
+results2<- full_join(results,bsflu_data,by=c("time" = "day"))
+
+#plot the results for each parameter combination, labeled by color, along with the observed data shown as points 
+ggplot(results2,aes(x=time,y=Y,color=as.factor(beta))) + geom_line() +
+  scale_color_discrete(name='Beta',breaks=as.factor(seq(1,3,0.2))) +
+  theme_bw() +
+  xlab('Time (Days)') +
+  ylim(0,800) + geom_point(aes(x=time,y=B),color='black')
+
+```
+
+We see varying levels of fit to the data. High values of $\beta$ seem to peak too early and too high, while low values of $\beta$ peak too late and too low. Which values provide the fit? 
+
+Let's define the likelihood function, assuming the observations ($B_t$) are Poisson distributed from underlying prevalence ($Y_t$): $B_t$ ~ $Pois(Y_t)$
+
+```{r}
+#here we define a function with an input b (for beta)
+poisson.loglik <- function (b) {
+  #the next two lines will select the output of XYZ model for the run in which beta was 
+  #equal to the current value b, and will only select the values at days 1 to 14 discarding  
+  #the intermediates at fractions of days
+  res <- results %>% filter(times %in% seq(1,14,1) & beta==b)
+  Y= res$Y
+  #finally, we will calculate the likelihood of observing B(t) given Y(t) at each time point
+  #we calculate the log likelihood ("log=TRUE"), and sum it across at time points
+  sum(dpois(x=bsflu_data$B,lambda=Y,log=TRUE))
+}
+```
+
+Now we have a function to calculate the log likelihood for any given $\beta$, and we have already made our model projects across a range of $\beta$. So let's visualize the log likelihood profile across this range of $\beta$.
+
+```{r}
+#here, we create a dataframe with each value of beta and the log likelihood associated with each value of beta
+#we use the "sapply" function to take each value from betalist and apply the function poisson.loglik
+
+df2= data.frame(beta=betalist,lik=sapply(betalist,poisson.loglik))
+#calculate the maximum value of the likelihood
+lik.max<- max(df2$lik)
+
+ggplot(df2,aes(x=beta,y=lik)) + geom_line() + theme_bw() + ylab("Log Likelihood") +
+  geom_segment(aes(x= subset(df2,lik==lik.max)$beta,y= min(lik), 
+                   xend=subset(df2,lik==lik.max)$beta,yend=lik.max),
+               color='red',linetype='dashed') 
+```
+
+We can see that the log likelihood is maximized when $\beta$ is somewhere around 1.7. Let's zoom in a bit and further investigate the area around that value.
+  
+```{r}
+#we'll create a list of betas between 1.6 and 1.8
+n= 50
+betalist= seq(1.6,1.8,length=n)
+
+parameters <- c(beta= betalist[1],gamma= 1/2.2)
+output <- ode(y = state, times = times, func = ClosedXYZ, parms = parameters)
+results<- data.frame(output,beta= rep(betalist[1],length(times)))
+
+for (i in 2:n){
+  parameters <- c(beta= betalist[i],gamma= 1/2.2)
+  output <- ode(y = state, times = times, func = ClosedXYZ, parms = parameters)
+  output<- data.frame(output,beta= rep(betalist[i],length(times)))
+  results= rbind(results,output)
+  }
+
+df3= data.frame(beta=betalist,lik=sapply(betalist,poisson.loglik))
+lik.max<- max(df3$lik)
+#here we calculate the likelihoods in a 95% confidence interval around the maximum
+lik.95<- lik.max - qchisq(p=0.95,df=1)/2
+#we select the beta associated with the lower bound (beta.025) and upper bound (beta.975)
+beta.025= range(subset(df3,lik > lik.95)$beta)[1]
+beta.975= range(subset(df3,lik > lik.95)$beta)[2]
+
+ggplot(df3,aes(x=beta,y=lik)) + geom_line() + theme_bw() + ylab("Log Likelihood") +
+  geom_segment(aes(x= subset(df3,lik==lik.max)$beta,y= min(lik),
+                   xend=subset(df3,lik==lik.max)$beta,yend=lik.max),
+               color='red',linetype='dashed') + 
+  geom_segment(aes(x= beta.025,y= min(lik),
+                   xend=beta.025,yend=subset(df3,beta==beta.025)$lik),
+               color='blue',linetype='dashed') + 
+  geom_segment(aes(x= beta.975,y= min(lik),
+                   xend=beta.975,yend=subset(df3,beta==beta.975)$lik),
+               color='blue',linetype='dashed')
+
+```
+
+Now let's visualize the fit along with the data.
+
+```{r, warning=FALSE}
+output.mean <- data.frame(ode(y = state, times = times, func = ClosedXYZ, 
+                   parms =  c(beta= subset(df3,lik==lik.max)$beta ,gamma= 1/2.2)),
+                   beta=rep(subset(df3,lik==lik.max)$beta,length(times)))
+output.lo <- data.frame(ode(y = state, times = times, func = ClosedXYZ, 
+                                parms =  c(beta= beta.025 ,gamma= 1/2.2)),
+                        beta= rep(beta.025,length(times)))
+output.hi <- data.frame(ode(y = state, times = times, func = ClosedXYZ, 
+                               parms =  c(beta= beta.975 ,gamma= 1/2.2)),
+                        beta=rep(beta.975,length(times)))
+comb<- rbind(output.mean,output.lo,output.hi)
+comb.full<- full_join(comb,bsflu_data,by=c("time" = "day"))
+
+ggplot(comb.full,aes(x=time,y=Y,color=as.factor(beta))) + geom_line() + 
+  xlab('Time (Days)') +
+  ylim(0,800) + geom_point(aes(x=time,y=B),color='black') + theme_bw() +
+  scale_color_discrete(name='beta')
+```
+
+## Estimating two parameters 
+
+In the above exercise, we assumed that knew $\gamma$ and only needed to estimate $\beta$. What if we needed to do both at the same time? For this simple model, we can do a grid search analyzing combinations of $\beta$ and $\gamma$ and determining which combinations maximize the likelihood of the observations.
+
+```{r}
+#We will select a sequence of 20 values for beta and gamma across a plausible range
+n= 20
+betalist= seq(1.5,2.5,length=n)
+gammalist= seq(0.1,1,length=n)
+
+#Here we evaluate the first combination to create our dataframe
+parameters <- c(beta= betalist[1],gamma= gammalist[1])
+output <- ode(y = state, times = times, func = ClosedXYZ, parms = parameters)
+results<- data.frame(output,beta= rep(betalist[1],length(times)),
+                     gamma=rep(gammalist[1],length(times)))
+
+#now we loop off the 400 combinations of beta and gamma (yes, the above data will be there twice)
+for (i in 1:n){
+  for (j in 1:n){
+    parameters <- c(beta= betalist[i],gamma= gammalist[j])
+    output <- ode(y = state, times = times, func = ClosedXYZ, parms = parameters)
+    output<- data.frame(output,beta= rep(betalist[i],length(times)),
+                         gamma=rep(gammalist[j],length(times)))
+    results= rbind(results,output)  
+  }
+}
+```
+
+First, let's look at the range of $\beta$ with an intermediate level of $\gamma$.
+
+```{r}
+#examine beta while keeping gamma constant
+ggplot(subset(results,gamma==gammalist[10]),aes(x=time,y=Y,color=as.factor(beta))) + 
+  geom_line() + theme_bw() + scale_color_discrete(name="beta") + ylim(c(0,800))
+```
+
+Now let's examine a range of $\gamma$ while holding $\beta$ constant.
+
+```{r}
+ggplot(subset(results,beta==beta[5]),aes(x=time,y=Y,color=as.factor(gamma))) + 
+  geom_line() + theme_bw() + scale_color_discrete(name="gamma") + ylim(c(0,800))
+
+```
+
+Now let's modify our likelihood function to take combinations of $\beta$ and $\gamma$.
+
+```{r}
+poisson.loglik <- function (b,g) {
+  res <- results %>% filter(times %in% seq(1,14,1) & beta==b & gamma==g)
+  Y= res$Y
+  sum(dpois(x=bsflu_data$B,lambda=Y,log=TRUE))
+}
+```
+
+Now we are ready to visualize the likelihood surface for these combinations of $\beta$ and $\gamma$. We'll do that by creating a two dimensional contour map, where the x-axis will be $\beta$, the y-axis will be $\gamma$, and the colors will signify the log likelihood values (higher values are a better fit).
+
+```{r}
+grid <- expand.grid(b=betalist,g=gammalist)
+grid <- plyr::ddply(grid,~b+g,mutate,loglik=poisson.loglik(b,g))
+grid <- subset(grid,is.finite(loglik))
+
+ggplot(grid,aes(x=b,y=g,z=loglik)) +
+  geom_contour_filled(breaks= -exp(seq(9,0,-0.2))) + scale_x_continuous(expand = c(0,0)) +
+  scale_y_continuous(expand=c(0,0)) + xlab("beta") + ylab("gamma") +
+  labs(fill = "Log Likelihood") + annotate("text",x=1.66,y=1/2.2,label="*",size=10)
+```
+
+Here, I've used an asterix to indicate the values of $\beta$ and $\gamma$ used in the Keeling and Rohani book for this example.
+
+
+## Uncertainty Analysis
+
+Now we will move on to a simple example of uncertainty analysis. Let's first look at introducing a simple intervention into our XYZ model, starting after day 6. Let's assume this intervention is some form of quaratine or distancing which reduces $\beta$ by some level $\alpha$ after day 6. What would be impact on the epidemic? 
+
+Let's first modify our model to make this possible.
+
+```{r}
+ClosedXYZ_intervene<-function(t, state, parameters) {
+  with(as.list(c(state, parameters)),{
+    N = X + Y + Z
+    if (t>6) {beta= beta*(1-alpha)}
+    dX <- -beta*X*Y/N 
+    dY <- beta*X*Y/N - gamma*Y
+    dZ <- gamma*Y
+    list(c(dX, dY, dZ))
+  }) 
+}
+
+state <- c(X = 762,
+           Y = 1,
+           Z = 0
+)
+
+times <- seq(0, 15, by = 0.1)
+
+```
+
+Now we will run our model twice, once with and without the intervention, to visualize the impact.
+
+```{r}
+#run without the intervention (alpha=0)
+parameters <- c(
+  beta = 1.66,
+  gamma = 1/2.2,
+  alpha=0
+)
+output <- data.frame(ode(y = state, times = times, func = ClosedXYZ_intervene, parms = parameters),intervention=rep('no',length(times)))
+
+# now with intervention
+parameters <- c(
+  beta = 1.66,
+  gamma = 1/2.2,
+  alpha=0.8
+)
+
+output2 <- data.frame(ode(y = state, times = times, func = ClosedXYZ_intervene, parms = parameters),intervention=rep('yes',length(times)))
+
+#combine the two outputs and visualize
+comb= rbind(output,output2)
+ggplot(comb,aes(x=time,y=Y,color=intervention)) + geom_line(aes(linetype= intervention)) + 
+  theme_bw() + scale_color_manual(values=c('black','blue')) + ylab("cases") + 
+  geom_vline(xintercept=6,linetype='dashed',color='red')
+
+```
+
+Now let's assume that we don't know $\beta$, $\gamma$ or $\alpha$ perfectly, and we want to predict the effectiveness of our intervention. 
+
+First, let's assume that $\beta$ and $\gamma$ are correlated, because we saw evidence of that in our parameter estimation above. We'll create some artificial joint distribution for their relationship to explore broader uncertainty than would be implied from the results above.
+
+```{r}
+#define values for beta and gamma
+gamma.mean= 0.45
+gamma.sigma= 0.025
+beta.mean= 1.66
+beta.sigma= 0.2
+
+#assume for convenience they arise from a multivariate normal distribution
+sigma <- matrix(c(beta.sigma,0.05,0.05,gamma.sigma), ncol=2)
+
+#now we will obtain random samples from this distribution
+pars <- rmvnorm(n=100000, mean=c(beta.mean,gamma.mean), sigma=sigma)
+colnames(pars)= c("beta","gamma")
+pars<- data.frame(pars)
+#remove values <0 as they not possible
+pars<- pars %>% filter(gamma > 0 & beta > 0)
+
+ggplot(pars,aes(x=beta,y=gamma)) + geom_bin2d(bins = 70) +
+  scale_fill_continuous(type = "viridis") +
+  theme_bw()
+```
+
+Now let's assume that we believe our intervention will efficacy somewhere between 50% and 70%, and use a uniform distribution to sample.
+
+```{r}
+pars$alpha= runif(dim(pars)[1],0.5,0.7)
+```
+
+Finally, we will run the model with and without the intervention, using random draws from $\beta$, $\gamma$ and $\alpha$. We'll examine the person-time of illness with and without the intervention, and calculate the reduction in illness person-time.
+
+```{r}
+n= 250 #number of draws
+casetime.with= rep(NA,n) #
+casetime.without= rep(NA,n)
+
+# now run the model n times with and without the intervention
+for (i in 1:n){
+  #first run it with intervention
+  parameters= c(beta=pars[i,1],gamma=pars[i,2],alpha=pars[i,3])
+  res <- data.frame(ode(y = state, times = times, func = ClosedXYZ_intervene, parms = parameters))
+  casetime.with[i] = as.numeric(res %>% filter(time %in% 1:15) %>% summarise(n=sum(Y)))
+  #then run without
+  parameters= c(beta=pars[i,1],gamma=pars[i,2],alpha=0)
+  res <- data.frame(ode(y = state, times = times, func = ClosedXYZ_intervene, parms = parameters))
+  casetime.without[i] = as.numeric(res %>% filter(time %in% 1:15) %>% summarise(n=sum(Y)))
+}
+
+# calculate the reduction in person-days of illness
+reduction= 100*(casetime.without - casetime.with)/casetime.without
+df4= data.frame(reduction)
+
+# visualize the distribution of reduction
+ggplot(df4,aes(x=reduction)) + geom_density(fill='blue',alpha=0.5) + 
+  scale_x_continuous(expand=c(0,0)) + scale_y_continuous(expand=c(0,0)) + 
+  theme_bw() + xlab("% Reduction")
+
+```
+
+Our intervention, introduced just before the peak of the outbreak, had only a mild reduction in person-days of illness under most combinations, but under some simulations it had more dramatic reductions. We can calculate the median and 95% uncertainty interval here.
+
+```{r}
+print(quantile(reduction,c(0.025,0.5,0.975)))
+
+```
+
+## Homework
+
+1.
+- Download a dataset on a measles outbreak in 3 communities in Niaemy, Niger (code below)
+- Assume the population size (N) is 50,000
+- Refit the SIR model to community B
+- Estimate $\beta$ and $\gamma$ for this community
+- Describe your findings
+- You should only need to change numbers in the above model (e.g. the duration of observation differs)
+
+```{r}
+niamey <- read.csv("http://kingaa.github.io/short-course/parest/niamey.csv")
+niamey.b = niamey %>% filter(community=="B")
+
+```
+
+2. Here are the case count data from Santa Clara county after March 1. If we visualize them, we get a nice epidemic curve, but we also believe that this was not due reaching a critical threshold of immunity as in the flu example above, but rather that parameters were changing. Describe (doing it is completely optional) how you could modify the XYZ model code above to estimate how changing parameter values during the past two months could explain the dynamics seen in the figure below. What parameter(s) could have changed and how? How could we include that in the model and estimate those parameter values? Keep it simple.
+
+```{r}
+fulldata<-read.csv('https://raw.githubusercontent.com/nytimes/covid-19-data/master/us-counties.csv')
+
+data <- fulldata %>%
+  filter(county=="Santa Clara") %>%
+  mutate(date= as.Date(date,"%Y-%m-%d"))
+
+inc <- diff(data$cases)
+inc.2 <- inc[30:length(inc)] #March 1
+plot(inc.2,type='b', xlab='days',ylab='new cases')
+
+```
+
+
+
+
+
